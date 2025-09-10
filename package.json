@@ -12,7 +12,6 @@
   ],
   "scripts": {
     "build": "tsc && shx chmod +x dist/*.js",
-    "prepare": "npm run build && husky",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint src/",
@@ -34,8 +33,10 @@
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.13.0",
+    "axios": "^1.11.0",
+    "digest-fetch": "^3.1.1",
     "dotenv": "^16.5.0",
-    "ts-caldav": "^0.2.0"
+    "webdav": "^5.8.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.29.0",

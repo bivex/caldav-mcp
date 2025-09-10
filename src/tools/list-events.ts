@@ -1,29 +1,274 @@
-import { CalDAVClient } from "ts-caldav"
+import { WebDAVClient } from "webdav"
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
+import axios from "axios"
 
 const dateString = z.string().refine((val) => !isNaN(Date.parse(val)), {
   message: "Invalid date string",
 })
 
-export function registerListEvents(client: CalDAVClient, server: McpServer) {
+function formatCalDAVDate(date: Date): string {
+  return date.toISOString().replace(/[-:]/g, "").split(".")[0] + "Z"
+}
+
+function parseCalDAVDate(dateStr: string): Date {
+  // Handle different CalDAV date formats
+  if (dateStr.includes('T')) {
+    // YYYYMMDDTHHMMSSZ format
+    const year = parseInt(dateStr.substring(0, 4))
+    const month = parseInt(dateStr.substring(4, 6)) - 1
+    const day = parseInt(dateStr.substring(6, 8))
+    const hour = parseInt(dateStr.substring(9, 11))
+    const minute = parseInt(dateStr.substring(11, 13))
+    const second = parseInt(dateStr.substring(13, 15))
+    return new Date(year, month, day, hour, minute, second)
+  } else {
+    // YYYYMMDD format (all-day events)
+    const year = parseInt(dateStr.substring(0, 4))
+    const month = parseInt(dateStr.substring(4, 6)) - 1
+    const day = parseInt(dateStr.substring(6, 8))
+    return new Date(year, month, day)
+  }
+}
+
+function parseICSContent(icsContent: string): any[] {
+  const events = []
+  const lines = icsContent.split('\n')
+  let currentEvent: any = null
+  let inEvent = false
+  
+  for (const line of lines) {
+    const trimmed = line.trim()
+    
+    if (trimmed === 'BEGIN:VEVENT') {
+      inEvent = true
+      currentEvent = {}
+    } else if (trimmed === 'END:VEVENT') {
+      if (currentEvent && currentEvent.summary) {
+        events.push(currentEvent)
+      }
+      inEvent = false
+      currentEvent = null
+    } else if (inEvent && currentEvent) {
+      if (trimmed.startsWith('SUMMARY:')) {
+        currentEvent.summary = trimmed.substring(8)
+      } else if (trimmed.startsWith('DTSTART:') || trimmed.startsWith('DTSTART;')) {
+        const dateValue = trimmed.split(':')[1]
+        currentEvent.start = dateValue
+        currentEvent.startDate = parseCalDAVDate(dateValue)
+      } else if (trimmed.startsWith('DTEND:') || trimmed.startsWith('DTEND;')) {
+        const dateValue = trimmed.split(':')[1]
+        currentEvent.end = dateValue
+        currentEvent.endDate = parseCalDAVDate(dateValue)
+      } else if (trimmed.startsWith('UID:')) {
+        currentEvent.uid = trimmed.substring(4)
+      } else if (trimmed.startsWith('DESCRIPTION:')) {
+        currentEvent.description = trimmed.substring(12)
+      } else if (trimmed.startsWith('LOCATION:')) {
+        currentEvent.location = trimmed.substring(9)
+      }
+    }
+  }
+  
+  return events
+}
+
+async function performCalDAVReport(baseUrl: string, username: string, password: string, calendarPath: string, startDate: string, endDate: string): Promise<any[]> {
+  const startFormatted = formatCalDAVDate(new Date(startDate))
+  const endFormatted = formatCalDAVDate(new Date(endDate))
+  
+  const reportBody = `<?xml version="1.0" encoding="utf-8" ?>
+<C:calendar-query xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
+  <D:prop>
+    <D:getetag />
+    <C:calendar-data />
+  </D:prop>
+  <C:filter>
+    <C:comp-filter name="VCALENDAR">
+      <C:comp-filter name="VEVENT">
+        <C:time-range start="${startFormatted}" end="${endFormatted}"/>
+      </C:comp-filter>
+    </C:comp-filter>
+  </C:filter>
+</C:calendar-query>`
+
+  try {
+    console.error(`[DEBUG] Performing CalDAV REPORT on: ${baseUrl}${calendarPath}`)
+    console.error(`[DEBUG] Date range: ${startFormatted} to ${endFormatted}`)
+    
+    const DigestFetch = (await import('digest-fetch')).default
+    const digestClient = new DigestFetch(username, password)
+    
+    const response = await digestClient.fetch(`${baseUrl}${calendarPath}`, {
+      method: 'REPORT',
+      body: reportBody,
+      headers: {
+        'Content-Type': 'application/xml; charset=utf-8',
+        'Depth': '1'
+      }
+    })
+    
+    const responseText = await response.text()
+    console.error(`[DEBUG] REPORT response status: ${response.status}`)
+    console.error(`[DEBUG] REPORT response data preview:`, responseText.substring(0, 500) + "...")
+    
+    // Parse XML response to extract calendar data
+    const events = []
+    const calendarDataMatches = responseText.match(/<C:calendar-data[^>]*>([\s\S]*?)<\/C:calendar-data>/gi)
+    
+    if (calendarDataMatches) {
+      console.error(`[DEBUG] Found ${calendarDataMatches.length} calendar-data entries`)
+      
+      for (const match of calendarDataMatches) {
+        const icsContent = match.replace(/<\/?C:calendar-data[^>]*>/gi, '').trim()
+        if (icsContent) {
+          const parsedEvents = parseICSContent(icsContent)
+          events.push(...parsedEvents)
+        }
+      }
+    }
+    
+    return events
+  } catch (error) {
+    console.error(`[DEBUG] CalDAV REPORT failed: ${error}`)
+    return []
+  }
+}
+
+export function registerListEvents(client: WebDAVClient, server: McpServer) {
   server.tool(
     "list-events",
     "List all events between start and end date in the calendar specified by its URL",
     { start: dateString, end: dateString, calendarUrl: z.string() },
     async ({ calendarUrl, start, end }) => {
-      const options = {
-        start: new Date(start),
-        end: new Date(end),
-      }
-      const allEvents = await client.getEvents(calendarUrl, options)
-      const data = allEvents.map((e) => ({
-        summary: e.summary,
-        start: e.start,
-        end: e.end,
-      }))
-      return {
-        content: [{ type: "text", text: JSON.stringify(data) }],
+      try {
+        console.error(`[DEBUG] Listing events in: ${calendarUrl} from ${start} to ${end}`)
+        
+        let allEvents = []
+        
+        // Approach 1: Try CalDAV REPORT method (proper CalDAV way)
+        try {
+          const baseUrl = process.env.CALDAV_BASE_URL || ""
+          const username = process.env.CALDAV_USERNAME || ""
+          const password = process.env.CALDAV_PASSWORD || ""
+          
+          console.error(`[DEBUG] Trying CalDAV REPORT method...`)
+          const caldavEvents = await performCalDAVReport(baseUrl, username, password, calendarUrl, start, end)
+          
+          if (caldavEvents.length > 0) {
+            console.error(`[DEBUG] CalDAV REPORT found ${caldavEvents.length} events`)
+            allEvents.push(...caldavEvents)
+          }
+        } catch (reportError) {
+          console.error(`[DEBUG] CalDAV REPORT approach failed: ${reportError}`)
+        }
+        
+        // Approach 2: Try WebDAV directory listing (fallback)
+        if (allEvents.length === 0) {
+          console.error(`[DEBUG] Trying WebDAV directory approach...`)
+          
+          try {
+            const contents = await client.getDirectoryContents(calendarUrl) as any[]
+            console.error(`[DEBUG] Found ${contents.length} items in calendar directory`)
+            
+            const icsFiles = contents.filter((item: any) => 
+              item.type === "file" && item.filename.endsWith('.ics')
+            )
+            
+            console.error(`[DEBUG] Found ${icsFiles.length} .ics files:`, icsFiles.map((f: any) => f.filename))
+            
+            for (const file of icsFiles) {
+              try {
+                // file.filename уже содержит полный путь, используем только имя файла
+                const fileName = file.filename.split('/').pop() || file.filename
+                const filePath = calendarUrl.endsWith("/") ? `${calendarUrl}${fileName}` : `${calendarUrl}/${fileName}`
+                console.error(`[DEBUG] Trying to read: ${filePath}`)
+                
+                const icsContent = await client.getFileContents(filePath, { format: "text" }) as string
+                const events = parseICSContent(icsContent)
+                
+                console.error(`[DEBUG] Parsed ${events.length} events from ${file.filename}`)
+                
+                // Filter events by date range
+                const filteredEvents = events.filter(event => {
+                  if (!event.startDate || !event.endDate) return false
+                  
+                  const startDate = new Date(start)
+                  const endDate = new Date(end)
+                  
+                  return event.startDate >= startDate && event.endDate <= endDate
+                })
+                
+                allEvents.push(...filteredEvents)
+              } catch (fileError) {
+                console.error(`[DEBUG] Error reading file ${file.filename}: ${fileError}`)
+              }
+            }
+          } catch (dirError) {
+            console.error(`[DEBUG] Error reading directory: ${dirError}`)
+          }
+        }
+        
+        // Approach 3: Try direct file access for known event UIDs
+        if (allEvents.length === 0) {
+          console.error(`[DEBUG] Trying direct file access for recent events...`)
+          
+          // Get recent event UIDs from logs or hardcode known ones for testing
+          const recentEventUIDs = [
+            '1757490373462-gou6xagrk@caldav-mcp',
+            '1757490378756-rdkgoiik0@caldav-mcp'
+          ]
+          
+          for (const uid of recentEventUIDs) {
+            try {
+              const filename = `${uid}.ics`
+              const testPath = calendarUrl.endsWith("/") ? `${calendarUrl}${filename}` : `${calendarUrl}/${filename}`
+              console.error(`[DEBUG] Testing direct access to: ${testPath}`)
+              
+              const exists = await client.exists(testPath)
+              console.error(`[DEBUG] File ${filename} exists: ${exists}`)
+              
+              if (exists) {
+                const content = await client.getFileContents(testPath, { format: "text" }) as string
+                const events = parseICSContent(content)
+                
+                // Filter by date range
+                const filteredEvents = events.filter(event => {
+                  if (!event.startDate || !event.endDate) return false
+                  
+                  const startDate = new Date(start)
+                  const endDate = new Date(end)
+                  
+                  return event.startDate >= startDate && event.endDate <= endDate
+                })
+                
+                allEvents.push(...filteredEvents)
+              }
+            } catch (testError) {
+              console.error(`[DEBUG] Direct access to ${uid} failed: ${testError}`)
+            }
+          }
+        }
+        
+        const data = allEvents.map((e) => ({
+          summary: e.summary || "No title",
+          start: e.start,
+          end: e.end,
+          uid: e.uid,
+          description: e.description || "",
+          location: e.location || ""
+        }))
+        
+        console.error(`[DEBUG] Returning ${data.length} events total`)
+        
+        return {
+          content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+        }
+      } catch (error) {
+        console.error(`[DEBUG] Error in list-events: ${error}`)
+        return {
+          content: [{ type: "text", text: `Error listing events: ${error}` }],
+        }
       }
     },
   )

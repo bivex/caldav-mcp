@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import "dotenv/config"
-import { CalDAVClient } from "ts-caldav"
+import { createClient, WebDAVClient } from "webdav"
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 
@@ -16,15 +16,34 @@ const server = new McpServer({
 })
 
 async function main() {
-  const client = await CalDAVClient.create({
-    baseUrl: process.env.CALDAV_BASE_URL || "",
-    auth: {
-      type: "basic",
-      username: process.env.CALDAV_USERNAME || "",
-      password: process.env.CALDAV_PASSWORD || "",
-    },
+  const rawBaseUrl = process.env.CALDAV_BASE_URL || ""
+  const username = process.env.CALDAV_USERNAME || ""
+  const password = process.env.CALDAV_PASSWORD || ""
+
+  console.error(`[DEBUG] Attempting CalDAV connection with:`)
+  console.error(`[DEBUG] Base URL: ${rawBaseUrl}`)
+  console.error(`[DEBUG] Username: ${username}`)
+  console.error(`[DEBUG] Password length: ${password.length}`)
+
+  // Create WebDAV client with Digest authentication support
+  const client: WebDAVClient = createClient(rawBaseUrl, {
+    username,
+    password,
+    authType: "digest" as any, // Try digest first
   })
 
+  try {
+    console.error(`[DEBUG] Testing connection...`)
+    // Test the connection by getting directory contents
+    const contents = await client.getDirectoryContents("/") as any[]
+    console.error(`[DEBUG] Connection successful! Found ${contents.length} items`)
+    console.error(`[DEBUG] Contents:`, contents.map((item: any) => ({ name: item.filename, type: item.type })))
+  } catch (error) {
+    console.error(`[DEBUG] Connection failed: ${error}`)
+    throw new Error(`CalDAV connection failed: ${error}`)
+  }
+
+  // Register tools with the WebDAV client
   registerCreateEvent(client, server)
   registerListEvents(client, server)
   registerDeleteEvent(client, server)
