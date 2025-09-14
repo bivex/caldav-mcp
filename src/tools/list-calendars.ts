@@ -28,9 +28,15 @@ export async function registerListCalendars(
                 const nestedContents = await client.getDirectoryContents(calendarDir.filename) as any[]
                 console.error(`[DEBUG] ${calendarDir.filename} nested contents:`, nestedContents.map((item: any) => ({ name: item.filename, type: item.type })))
                 
-                // Add nested calendars
+                // Add nested calendars (exclude inbox/outbox)
                 const nestedCalendars = nestedContents
-                  .filter((item: any) => item.type === "directory" && !item.filename.includes('.'))
+                  .filter((item: any) => {
+                    const name = item.filename.split('/').pop()
+                    return item.type === "directory" && 
+                           !item.filename.includes('.') && 
+                           name !== 'inbox' && 
+                           name !== 'outbox'
+                  })
                   .map((item: any) => ({ 
                     name: `📅 ${item.filename.split('/').pop()}`, 
                     url: item.filename
@@ -68,9 +74,14 @@ export async function registerListCalendars(
                 const userContents = await client.getDirectoryContents(principalDir.filename) as any[]
                 console.error(`[DEBUG] ${principalDir.filename} contents:`, userContents.map((item: any) => ({ name: item.filename, type: item.type })))
                 
-                // Look for calendar-home-set or calendar directories
+                // Look for calendar-home-set or calendar directories (exclude inbox/outbox)
                 const userCalendars = userContents
-                  .filter((item: any) => item.type === "directory")
+                  .filter((item: any) => {
+                    const name = item.filename.split('/').pop()
+                    return item.type === "directory" && 
+                           name !== 'inbox' && 
+                           name !== 'outbox'
+                  })
                   .map((item: any) => ({ 
                     name: `👤 ${item.filename.split('/').pop()} (in ${principalDir.filename})`, 
                     url: item.filename
@@ -96,7 +107,12 @@ export async function registerListCalendars(
           console.error(`[DEBUG] Error accessing /principals: ${principalsError}`)
         }
         
-        return { content: [{ type: "text", text: JSON.stringify(calendars) }] }
+        // Remove duplicates based on URL
+        const uniqueCalendars = calendars.filter((calendar, index, self) => 
+          index === self.findIndex(c => c.url === calendar.url)
+        )
+        
+        return { content: [{ type: "text", text: JSON.stringify(uniqueCalendars) }] }
       } catch (error) {
         return { 
           content: [{ 
