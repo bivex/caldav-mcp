@@ -31,6 +31,31 @@ function parseCalDAVDate(dateStr: string): Date {
   }
 }
 
+async function getAllDirectoryContents(client: any, path: string): Promise<any[]> {
+  const allItems: any[] = []
+  
+  try {
+    const contents = await client.getDirectoryContents(path) as any[]
+    
+    for (const item of contents) {
+      allItems.push(item)
+      
+      if (item.type === "directory" && !item.filename.includes('..')) {
+        try {
+          const subContents = await getAllDirectoryContents(client, item.filename)
+          allItems.push(...subContents)
+        } catch (error) {
+          console.error(`[DEBUG] Error accessing subdirectory ${item.filename}: ${error}`)
+        }
+      }
+    }
+  } catch (error) {
+    console.error(`[DEBUG] Error accessing directory ${path}: ${error}`)
+  }
+  
+  return allItems
+}
+
 function parseICSContent(icsContent: string): any[] {
   const events = []
   const lines = icsContent.split('\n')
@@ -174,6 +199,7 @@ export function registerListEvents(client: WebDAVClient, server: McpServer) {
           try {
             const contents = await client.getDirectoryContents(calendarUrl) as any[]
             console.error(`[DEBUG] Found ${contents.length} items in calendar directory`)
+            console.error(`[DEBUG] Directory contents:`, contents.map((item: any) => ({ name: item.filename, type: item.type })))
             
             const icsFiles = contents.filter((item: any) => 
               item.type === "file" && item.filename.endsWith('.ics')
@@ -183,14 +209,14 @@ export function registerListEvents(client: WebDAVClient, server: McpServer) {
             
             for (const file of icsFiles) {
               try {
-                // file.filename уже содержит полный путь, используем только имя файла
-                const fileName = file.filename.split('/').pop() || file.filename
-                const filePath = calendarUrl.endsWith("/") ? `${calendarUrl}${fileName}` : `${calendarUrl}/${fileName}`
+                // Используем полный путь из file.filename
+                const filePath = file.filename
                 console.error(`[DEBUG] Trying to read: ${filePath}`)
                 
                 const icsContent = await client.getFileContents(filePath, { format: "text" }) as string
-                const events = parseICSContent(icsContent)
+                console.error(`[DEBUG] File content preview:`, icsContent.substring(0, 200) + "...")
                 
+                const events = parseICSContent(icsContent)
                 console.error(`[DEBUG] Parsed ${events.length} events from ${file.filename}`)
                 
                 // Filter events by date range
@@ -200,9 +226,13 @@ export function registerListEvents(client: WebDAVClient, server: McpServer) {
                   const startDate = new Date(start)
                   const endDate = new Date(end)
                   
+                  console.error(`[DEBUG] Event ${event.summary}: ${event.startDate} - ${event.endDate}`)
+                  console.error(`[DEBUG] Range: ${startDate} - ${endDate}`)
+                  
                   return event.startDate >= startDate && event.endDate <= endDate
                 })
                 
+                console.error(`[DEBUG] Filtered to ${filteredEvents.length} events in date range`)
                 allEvents.push(...filteredEvents)
               } catch (fileError) {
                 console.error(`[DEBUG] Error reading file ${file.filename}: ${fileError}`)
@@ -213,27 +243,27 @@ export function registerListEvents(client: WebDAVClient, server: McpServer) {
           }
         }
         
-        // Approach 3: Try direct file access for known event UIDs
+        // Approach 3: Try recursive directory search for .ics files
         if (allEvents.length === 0) {
-          console.error(`[DEBUG] Trying direct file access for recent events...`)
+          console.error(`[DEBUG] Trying recursive directory search...`)
           
-          // Get recent event UIDs from logs or hardcode known ones for testing
-          const recentEventUIDs = [
-            '1757490373462-gou6xagrk@caldav-mcp',
-            '1757490378756-rdkgoiik0@caldav-mcp'
-          ]
-          
-          for (const uid of recentEventUIDs) {
-            try {
-              const filename = `${uid}.ics`
-              const testPath = calendarUrl.endsWith("/") ? `${calendarUrl}${filename}` : `${calendarUrl}/${filename}`
-              console.error(`[DEBUG] Testing direct access to: ${testPath}`)
-              
-              const exists = await client.exists(testPath)
-              console.error(`[DEBUG] File ${filename} exists: ${exists}`)
-              
-              if (exists) {
-                const content = await client.getFileContents(testPath, { format: "text" }) as string
+          try {
+            // Try to find .ics files in subdirectories
+            const allContents = await getAllDirectoryContents(client, calendarUrl)
+            console.error(`[DEBUG] Recursive search found ${allContents.length} total items`)
+            
+            const allIcsFiles = allContents.filter((item: any) => 
+              item.type === "file" && item.filename.endsWith('.ics')
+            )
+            
+            console.error(`[DEBUG] Found ${allIcsFiles.length} .ics files recursively:`, allIcsFiles.map((f: any) => f.filename))
+            
+            for (const file of allIcsFiles) {
+              try {
+                const filePath = file.filename
+                console.error(`[DEBUG] Reading recursive file: ${filePath}`)
+                
+                const content = await client.getFileContents(filePath, { format: "text" }) as string
                 const events = parseICSContent(content)
                 
                 // Filter by date range
@@ -247,17 +277,19 @@ export function registerListEvents(client: WebDAVClient, server: McpServer) {
                 })
                 
                 allEvents.push(...filteredEvents)
+              } catch (error) {
+                console.error(`[DEBUG] Error reading recursive file ${file.filename}: ${error}`)
               }
-            } catch (testError) {
-              console.error(`[DEBUG] Direct access to ${uid} failed: ${testError}`)
             }
+          } catch (error) {
+            console.error(`[DEBUG] Error in recursive search: ${error}`)
           }
         }
         
-        const data = allEvents.map((e) => ({
+      const data = allEvents.map((e) => ({
           summary: e.summary || "No title",
-          start: e.start,
-          end: e.end,
+        start: e.start,
+        end: e.end,
           uid: e.uid,
           description: e.description || "",
           location: e.location || ""
@@ -270,7 +302,7 @@ export function registerListEvents(client: WebDAVClient, server: McpServer) {
         }
       } catch (error) {
         console.error(`[DEBUG] Error in list-events: ${error}`)
-        return {
+      return {
           content: [{ type: "text", text: `Error listing events: ${error}` }],
         }
       }
