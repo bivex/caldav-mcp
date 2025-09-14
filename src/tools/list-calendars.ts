@@ -1,5 +1,6 @@
 import { WebDAVClient } from "webdav"
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
+import { z } from "zod"
 
 export async function registerListCalendars(
   client: WebDAVClient,
@@ -8,7 +9,9 @@ export async function registerListCalendars(
   server.tool(
     "list-calendars",
     "List all available calendars from the CalDAV server. Returns calendar names and URLs, excluding inbox/outbox directories. Useful for discovering which calendars are available for creating and managing events.",
-    {},
+    {
+      // No parameters needed - this tool lists all available calendars
+    },
     async () => {
       try {
         // First check root directory
