@@ -171,7 +171,8 @@ export function registerListEvents(client: WebDAVClient, server: McpServer) {
     },
     async ({ calendarUrl, start, end }) => {
       try {
-        console.error(`[DEBUG] Listing events in: ${calendarUrl} from ${start} to ${end}`)
+        console.error(`[DEBUG] Listing events in: ${calendarUrl}`)
+        console.error(`[DEBUG] Date range: ${start} to ${end}`)
         
         let allEvents = []
         
@@ -264,7 +265,10 @@ export function registerListEvents(client: WebDAVClient, server: McpServer) {
                 console.error(`[DEBUG] Reading recursive file: ${filePath}`)
                 
                 const content = await client.getFileContents(filePath, { format: "text" }) as string
+                console.error(`[DEBUG] File content preview:`, content.substring(0, 200) + "...")
+                
                 const events = parseICSContent(content)
+                console.error(`[DEBUG] Parsed ${events.length} events from ${file.filename}`)
                 
                 // Filter by date range
                 const filteredEvents = events.filter(event => {
@@ -273,9 +277,13 @@ export function registerListEvents(client: WebDAVClient, server: McpServer) {
                   const startDate = new Date(start)
                   const endDate = new Date(end)
                   
+                  console.error(`[DEBUG] Event ${event.summary}: ${event.startDate} - ${event.endDate}`)
+                  console.error(`[DEBUG] Range: ${startDate} - ${endDate}`)
+                  
                   return event.startDate >= startDate && event.endDate <= endDate
                 })
                 
+                console.error(`[DEBUG] Filtered to ${filteredEvents.length} events in date range`)
                 allEvents.push(...filteredEvents)
               } catch (error) {
                 console.error(`[DEBUG] Error reading recursive file ${file.filename}: ${error}`)
