@@ -5,8 +5,11 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 export function registerDeleteEvent(client: WebDAVClient, server: McpServer) {
   server.tool(
     "delete-event",
-    "Deletes an event in the calendar specified by its URL",
-    { uid: z.string(), calendarUrl: z.string() },
+    "Delete a calendar event by its unique identifier (UID). Permanently removes the event from the specified calendar on the CalDAV server.",
+    { 
+      uid: z.string().describe("Unique identifier of the event to delete (obtained from list-events)"), 
+      calendarUrl: z.string().describe("URL of the calendar containing the event (use list-calendars to get available URLs)") 
+    },
     async ({ uid, calendarUrl }) => {
       try {
         const filename = `${uid}.ics`

@@ -138,8 +138,12 @@ async function performCalDAVReport(baseUrl: string, username: string, password: 
 export function registerListEvents(client: WebDAVClient, server: McpServer) {
   server.tool(
     "list-events",
-    "List all events between start and end date in the calendar specified by its URL",
-    { start: dateString, end: dateString, calendarUrl: z.string() },
+    "List all calendar events within a specified date range. Uses CalDAV REPORT method for efficient querying and supports both single and recurring events. Returns event details including summary, start/end times, and descriptions.",
+    { 
+      start: dateString.describe("Start date for the event search range (ISO 8601 format, e.g., '2025-09-10T00:00:00Z')"), 
+      end: dateString.describe("End date for the event search range (ISO 8601 format, e.g., '2025-09-10T23:59:59Z')"), 
+      calendarUrl: z.string().describe("URL of the calendar to search (use list-calendars to get available URLs)") 
+    },
     async ({ calendarUrl, start, end }) => {
       try {
         console.error(`[DEBUG] Listing events in: ${calendarUrl} from ${start} to ${end}`)

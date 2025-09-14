@@ -60,13 +60,13 @@ END:VCALENDAR`
 export function registerCreateEvent(client: WebDAVClient, server: McpServer) {
   server.tool(
     "create-event",
-    "Creates an event in the calendar specified by its URL",
+    "Create a new calendar event in the specified calendar. Supports recurring events with various patterns (daily, weekly, monthly, yearly). The event will be created as an ICS file on the CalDAV server.",
     {
-      summary: z.string(),
-      start: z.string().datetime(),
-      end: z.string().datetime(),
-      calendarUrl: z.string(),
-      recurrenceRule: recurrenceRuleSchema.optional(),
+      summary: z.string().describe("Event title or summary"),
+      start: z.string().datetime().describe("Event start time in ISO 8601 format (e.g., '2025-09-10T09:00:00Z')"),
+      end: z.string().datetime().describe("Event end time in ISO 8601 format (e.g., '2025-09-10T10:00:00Z')"),
+      calendarUrl: z.string().describe("URL of the calendar where the event should be created (use list-calendars to get available URLs)"),
+      recurrenceRule: recurrenceRuleSchema.optional().describe("Optional recurrence rule for repeating events (daily, weekly, monthly, yearly patterns)"),
     },
     async ({ calendarUrl, summary, start, end, recurrenceRule }) => {
       try {

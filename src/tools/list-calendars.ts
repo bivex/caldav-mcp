@@ -7,7 +7,7 @@ export async function registerListCalendars(
 ) {
   server.tool(
     "list-calendars",
-    "List all calendars returning both name and URL",
+    "List all available calendars from the CalDAV server. Returns calendar names and URLs, excluding inbox/outbox directories. Useful for discovering which calendars are available for creating and managing events.",
     {},
     async () => {
       try {
