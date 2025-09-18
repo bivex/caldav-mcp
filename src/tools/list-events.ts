@@ -160,6 +160,33 @@ async function performCalDAVReport(baseUrl: string, username: string, password: 
   }
 }
 
+function normalizeDateRange(start: string, end: string): { start: string, end: string } {
+  // Handle incomplete end dates (e.g., "2025" -> "2025-12-31T23:59:59Z")
+  let normalizedEnd = end
+  if (end && end.length === 4 && /^\d{4}$/.test(end)) {
+    normalizedEnd = `${end}-12-31T23:59:59Z`
+  } else if (end && end.length === 7 && /^\d{4}-\d{2}$/.test(end)) {
+    // Handle YYYY-MM format
+    const lastDay = new Date(parseInt(end.substring(0, 4)), parseInt(end.substring(5, 7)), 0).getDate()
+    normalizedEnd = `${end}-${lastDay.toString().padStart(2, '0')}T23:59:59Z`
+  } else if (end && end.length === 10 && /^\d{4}-\d{2}-\d{2}$/.test(end)) {
+    // Handle YYYY-MM-DD format
+    normalizedEnd = `${end}T23:59:59Z`
+  }
+  
+  // Handle incomplete start dates
+  let normalizedStart = start
+  if (start && start.length === 4 && /^\d{4}$/.test(start)) {
+    normalizedStart = `${start}-01-01T00:00:00Z`
+  } else if (start && start.length === 7 && /^\d{4}-\d{2}$/.test(start)) {
+    normalizedStart = `${start}-01T00:00:00Z`
+  } else if (start && start.length === 10 && /^\d{4}-\d{2}-\d{2}$/.test(start)) {
+    normalizedStart = `${start}T00:00:00Z`
+  }
+  
+  return { start: normalizedStart, end: normalizedEnd }
+}
+
 export function registerListEvents(client: WebDAVClient, server: McpServer) {
   server.tool(
     "list-events",
@@ -171,8 +198,12 @@ export function registerListEvents(client: WebDAVClient, server: McpServer) {
     },
     async ({ calendarUrl, start, end }) => {
       try {
+        // Normalize date ranges to handle incomplete dates
+        const { start: normalizedStart, end: normalizedEnd } = normalizeDateRange(start, end)
+        
         console.error(`[DEBUG] Listing events in: ${calendarUrl}`)
-        console.error(`[DEBUG] Date range: ${start} to ${end}`)
+        console.error(`[DEBUG] Original date range: ${start} to ${end}`)
+        console.error(`[DEBUG] Normalized date range: ${normalizedStart} to ${normalizedEnd}`)
         
         let allEvents = []
         
@@ -183,7 +214,7 @@ export function registerListEvents(client: WebDAVClient, server: McpServer) {
           const password = process.env.CALDAV_PASSWORD || ""
           
           console.error(`[DEBUG] Trying CalDAV REPORT method...`)
-          const caldavEvents = await performCalDAVReport(baseUrl, username, password, calendarUrl, start, end)
+          const caldavEvents = await performCalDAVReport(baseUrl, username, password, calendarUrl, normalizedStart, normalizedEnd)
           
           if (caldavEvents.length > 0) {
             console.error(`[DEBUG] CalDAV REPORT found ${caldavEvents.length} events`)
@@ -220,17 +251,22 @@ export function registerListEvents(client: WebDAVClient, server: McpServer) {
                 const events = parseICSContent(icsContent)
                 console.error(`[DEBUG] Parsed ${events.length} events from ${file.filename}`)
                 
-                // Filter events by date range
+                // Filter events by date range (check for overlap, not strict containment)
                 const filteredEvents = events.filter(event => {
                   if (!event.startDate || !event.endDate) return false
                   
-                  const startDate = new Date(start)
-                  const endDate = new Date(end)
+                  const startDate = new Date(normalizedStart)
+                  const endDate = new Date(normalizedEnd)
                   
                   console.error(`[DEBUG] Event ${event.summary}: ${event.startDate} - ${event.endDate}`)
                   console.error(`[DEBUG] Range: ${startDate} - ${endDate}`)
                   
-                  return event.startDate >= startDate && event.endDate <= endDate
+                  // Check if event overlaps with the date range
+                  // Event overlaps if: event.start < range.end AND event.end > range.start
+                  const eventOverlaps = event.startDate < endDate && event.endDate > startDate
+                  
+                  console.error(`[DEBUG] Event overlaps: ${eventOverlaps}`)
+                  return eventOverlaps
                 })
                 
                 console.error(`[DEBUG] Filtered to ${filteredEvents.length} events in date range`)
@@ -270,17 +306,22 @@ export function registerListEvents(client: WebDAVClient, server: McpServer) {
                 const events = parseICSContent(content)
                 console.error(`[DEBUG] Parsed ${events.length} events from ${file.filename}`)
                 
-                // Filter by date range
+                // Filter by date range (check for overlap, not strict containment)
                 const filteredEvents = events.filter(event => {
                   if (!event.startDate || !event.endDate) return false
                   
-                  const startDate = new Date(start)
-                  const endDate = new Date(end)
+                  const startDate = new Date(normalizedStart)
+                  const endDate = new Date(normalizedEnd)
                   
                   console.error(`[DEBUG] Event ${event.summary}: ${event.startDate} - ${event.endDate}`)
                   console.error(`[DEBUG] Range: ${startDate} - ${endDate}`)
                   
-                  return event.startDate >= startDate && event.endDate <= endDate
+                  // Check if event overlaps with the date range
+                  // Event overlaps if: event.start < range.end AND event.end > range.start
+                  const eventOverlaps = event.startDate < endDate && event.endDate > startDate
+                  
+                  console.error(`[DEBUG] Event overlaps: ${eventOverlaps}`)
+                  return eventOverlaps
                 })
                 
                 console.error(`[DEBUG] Filtered to ${filteredEvents.length} events in date range`)
